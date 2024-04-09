@@ -1,0 +1,8 @@
+__pycache__
+chess-mamba-v0
+models
+test_dataset_lichess_200k_elo_bins.zip
+train_dataset_lichess_200k_elo_bins.zip
+wandb
+board_states.pt
+converted_states.pt
