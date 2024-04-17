@@ -1,170 +1,105 @@
 from tokenizer import CheessTokenizer
-from model import ChessMambaModel, ChessMambaConfig
+from model import ChessMambaModel, ChessMambaConfig, ChessLlamaModel, ChessLlamaConfig
 from datasets import load_from_disk
 import torch
 from tqdm import tqdm
-import numpy as np
 import wandb
-import math
 import os
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import destroy_process_group, init_process_group
-from torch.utils.data.distributed import DistributedSampler
-
-
-def get_lr(
-    iter_num: int,
-    warmup_iters: int,
-    learning_rate: float,
-    lr_decay_iters: int,
-    min_lr: float,
-):
-    # 1) linear warmup for warmup_iters steps
-    if iter_num < warmup_iters:
-        return learning_rate * iter_num / warmup_iters
-    # 2) if it > lr_decay_iters, return min learning rate
-    if iter_num > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (iter_num - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
-
+from torch.optim import AdamW
+from transformers import Trainer, TrainingArguments,LlamaConfig
 
 #Train params
-if torch.cuda.is_available():
-    device = torch.device("cuda:1")
+#if torch.cuda.is_available():
+#    device = torch.device("cuda:7")
 scratch = True
-name = "chess-mamba-v0"
+name = "chess-mamba-v1.2-stockfish"
 wandb_project = "chess-mamba"
 wandb_run_name = name
-min_lr = 1e-7
-learning_rate = 1e-5
-warmup_iters = 1000
-eval_every = 50
-save_every = 2000
-ddp = True
-maximum_iterations = 20000
-gradient_accumulation_steps = 16
-batch_size = 64
 
-grad_clip=1
-# Load the dataset
-file_name="dataset_lichess_200k_elo_bins.zip"
-tokenizer = CheessTokenizer()
-
-dataset = load_from_disk("train_"+file_name)
-test_dataset = load_from_disk("test_"+file_name)
 
 def collate_fn(batch):
     max_length = max([len(data['ids'][0]) for data in batch])
     padded_ids = []
+    padded_labels = []
     for data in batch:
         ids = data['ids'][0]
-        ids.extend([0]*(max_length - len(ids)))  # Padding
+        input_ids = ids
+        input_ids.extend([0]*(max_length - len(ids)))  # Padding
+        labels = [-100 if x == 0 else x for x in input_ids]
         padded_ids.append(ids)
-       
-    return {'ids': torch.tensor(padded_ids)}
-
-
-if scratch:
-    model = ChessMambaModel(ChessMambaConfig())
-else:
-    model = ChessMambaModel.from_pretrained(name)
+        padded_labels.append(labels)
+    return {'input_ids': torch.tensor(padded_ids), 'labels': torch.tensor(padded_labels)}
 
 
 
-if ddp:
-    init_process_group(backend="nccl")
-    ddp_rank = int(os.environ["RANK"])
-    ddp_local_rank = int(os.environ["LOCAL_RANK"])
-    ddp_world_size = int(os.environ["WORLD_SIZE"])
-    device = f"cuda:{ddp_local_rank}"
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0  # this process will do logging, checkpointing etc.
-    seed_offset = ddp_rank  # each process gets a different seed
-    # world_size number of processes will be training simultaneously, so we can scale
-    # down the desired gradient accumulation iterations per process proportionally
-    assert gradient_accumulation_steps % ddp_world_size == 0
-    gradient_accumulation_steps //= ddp_world_size
-else:
-    # if not ddp, we are running on a single gpu, and one process
-    master_process = True
-    seed_offset = 0
-    ddp_world_size = 1
-sampler = DistributedSampler(dataset,num_replicas=ddp_world_size,rank=ddp_rank) if ddp else None
-train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn, sampler=sampler, shuffle=False)
 
-model.to(device)
-model.train()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-if ddp:
-    prefix = "_orig_mod." if compile else ""
-    model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
-    model = DDP(model, device_ids=[ddp_local_rank])
+# Load the dataset
+file_name="dataset_stockfish_dataset_blocks.zip"
+tokenizer = CheessTokenizer()
 
-if master_process:
-    wandb.init(project=wandb_project, name=wandb_run_name)
-    os.makedirs("models/"+name, exist_ok=True)
+dataset = load_from_disk("train_"+file_name)
+test_dataset = load_from_disk("test_"+file_name)
+test_dataset = test_dataset.select(range(1000))
+    
 
-# Training loop
-count=0
-raw_model = model.module
-log_spaces = [2,4,8,16,32,64,128,256,512]
-epoch = 0
-while count<maximum_iterations:
-    sampler.set_epoch(epoch)
-    with tqdm(total=maximum_iterations) as pbar:
-        for example in train_dataloader:
-            ids = example["ids"].to(device)
+#if scratch:
+model = ChessMambaModel(ChessMambaConfig())
+#else:
+#    model = ChessMambaModel.from_pretrained(name)
+#model = ChessLlamaModel(ChessLlamaConfig())
 
-            lr = get_lr(count, warmup_iters, learning_rate, maximum_iterations, min_lr)
-            
-            if count % eval_every == 0 or count in log_spaces:
-                model.eval()
-                total_loss = 0
-                for j,eval_example in enumerate(test_dataset):
-                    eval_ids = torch.tensor(eval_example["ids"]).to(device)
-                    masked_ids = eval_ids.clone()
-                    masked_ids[masked_ids == 0] = -100
-                
-                    loss = model(eval_ids,labels=masked_ids).loss
-                    total_loss+=loss.item()
-                    if j>100:
-                        break
-                total_loss = total_loss/100
-                
-                model.train()
-                if master_process:
-                    print(f"Loss: {total_loss}")
-                    wandb.log({"loss":total_loss,"lr":lr,"step":count})
-            if master_process:
-                if count % save_every == 0:
-                    raw_model.save_pretrained("models/"+name+"/"+str(count))
-                
-                if count in log_spaces:
-                    raw_model.save_pretrained("models/"+name+"/"+str(count))
+model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+num_params = sum([torch.numel(p) for p in model_parameters])
+print("Number of parameters: ", num_params)
+# print(LlamaConfig())
+# print(ChessLlamaConfig())
 
-        
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # check when ids = 0 and set them to -100
-                masked_ids = ids.clone()
-                masked_ids[masked_ids == 0] = -100
-                output = model(ids,labels= masked_ids)
-                loss = output.loss
-                loss = loss 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            optimizer.zero_grad()
-            count+=1
-            pbar.update()
-            if count>maximum_iterations:
-                break
-    epoch+=1
-if ddp:
-    destroy_process_group()
-if master_process:
-    raw_model.save_pretrained(name,cache_dir="./models")
+
+
+batch_size = 16
+gradient_accumulation_steps = 16
+num_epochs = 2
+num_steps = len(dataset)//batch_size*num_epochs
+warmup_iters = num_steps//20
+max_iter = 100000
+
+
+
+learning_rate = 1e-3
+
+training_args = TrainingArguments(
+    name,
+    per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size,
+    num_train_epochs=num_epochs,
+    gradient_accumulation_steps=gradient_accumulation_steps,
+    evaluation_strategy="steps",
+    eval_steps=0.05,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.05,
+    remove_unused_columns=False,
+    learning_rate=learning_rate,
+    logging_strategy="steps",
+    logging_steps=0.0005,
+    report_to="wandb",
+    save_strategy="steps",
+    save_steps=0.05,
+)
+
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    eval_dataset=test_dataset,
+    data_collator=collate_fn)
+
+wandb.init(project=wandb_project, name=wandb_run_name)
+
+
+trainer.train()
+
+os.makedirs("models/"+name, exist_ok=True)
+
+model.save_pretrained(name,cache_dir="./models")

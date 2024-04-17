@@ -5,7 +5,10 @@ import numpy as np
 from tqdm import tqdm
 def process(example,tokenizer):
         column_name = "transcript"
-        ids = np.array([tokenizer.encode(example[column_name])])
+        split_text = example[column_name].split(";")
+        #print(split_text)
+        first = split_text[1]
+        ids = np.array([tokenizer.encode(first)])
         out = {"ids": ids, "len": len(ids)}
         return out
 def pretokenize_dataset(dataset_name,file_name,tokenizer):
@@ -21,5 +24,5 @@ def pretokenize_dataset(dataset_name,file_name,tokenizer):
 
 
 dataset_name="adamkarvonen/chess_games"
-file_name="lichess_200k_elo_bins.zip"
+file_name="stockfish_dataset_blocks.zip"
 pretokenize_dataset(dataset_name,file_name,CheessTokenizer())

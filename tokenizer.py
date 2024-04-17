@@ -35,6 +35,8 @@ class CheessTokenizer():
             if text[0] == " ":
                 encoded.append(self.token_to_id[" "])
                 text = text[1:]
+            if text[0] == ";":
+                text = text[1:]
             split_text = text.split(" ")
         
             for token in split_text:
@@ -61,13 +63,23 @@ class CheessTokenizer():
                     if tokens == "stop":
                         encoded=[""]
                     for t in tokens:
-                        encoded.append(self.token_to_id[t])
+                        try:
+                            encoded.append(self.token_to_id[t])
+                        except:
+                            print("Error in token: ",t)
+                            print("Token list: ",tokens)
+                            print("Text: ",text)
+                            print("Encoded: ",encoded)
+                            exit()
                 encoded.append(self.token_to_id[" "])
 
             return encoded[:-1]
     
     def decode(self, tokens):
         return "".join([self.id_to_token[token.item()] for token in tokens])
+
+    def decode_batch(self, tokens):
+        return [self.decode(token) for token in tokens]
 
     def decode_san(self, tokens):
         string = ""
@@ -77,6 +89,9 @@ class CheessTokenizer():
                 decoded = decoded[1:]
             string+=decoded
         return string
+    
+    def decode_san_batch(self, batch_tokens):
+        return [self.decode_san(batch) for batch in batch_tokens]
             
         
     def _build_vocab(self):
