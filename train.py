@@ -7,12 +7,15 @@ import wandb
 import os
 from torch.optim import AdamW
 from transformers import Trainer, TrainingArguments,LlamaConfig
+import argparse
+import glob
+
 
 #Train params
 #if torch.cuda.is_available():
 #    device = torch.device("cuda:7")
 scratch = True
-name = "chess-mamba-v1.2-stockfish"
+name = "chess-mamba-v1.4-stockfish"
 wandb_project = "chess-mamba"
 wandb_run_name = name
 
@@ -31,8 +34,19 @@ def collate_fn(batch):
     return {'input_ids': torch.tensor(padded_ids), 'labels': torch.tensor(padded_labels)}
 
 
+parse = argparse.ArgumentParser()
+parse.add_argument("--scratch", type=bool, default=True)
+parse.add_argument("--name", type=str, default="chess-mamba-v1.4-stockfish")
+parse.add_argument("--num_layers", type=int, default=16)
+parse.add_argument("--hidden_size", type=int, default=512)
+parse.add_argument("--state_size", type=int, default=32)
+parse.add_argument("--num_attention_heads", type=int, default=8)
+parse.add_argument("--batch_size", type=int, default=64)
+parse.add_argument("--gradient_accumulation_steps", type=int, default=4)
+parse.add_argument("--num_epochs", type=int, default=10)
+parse.add_argument("--lr", type=float, default=1e-3)
 
-
+args = parse.parse_args()
 
 # Load the dataset
 file_name="dataset_stockfish_dataset_blocks.zip"
@@ -43,33 +57,46 @@ test_dataset = load_from_disk("test_"+file_name)
 test_dataset = test_dataset.select(range(1000))
     
 
-#if scratch:
-model = ChessMambaModel(ChessMambaConfig())
-#else:
-#    model = ChessMambaModel.from_pretrained(name)
-#model = ChessLlamaModel(ChessLlamaConfig())
+if scratch:
+    if "mamba" in name:
+        config = ChessMambaConfig(num_hidden_layers=args.num_layers,hidden_size=args.hidden_size,intermediate_size=args.hidden_size*2,state_size=args.state_size)
+        model = ChessMambaModel(config).model
+    elif "llama" in name:
+        config = ChessLlamaConfig(num_hidden_layers=args.num_layers,hidden_size=args.hidden_size,n_head=args.num_attention_heads)
+        model = ChessLlamaModel(config).model
+    else:
+        print("Invalid model name")
+        exit()
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    num_params = sum([torch.numel(p) for p in model_parameters])
+    resume_from_checkpoint = False
+    print("Number of parameters: ", num_params)
+else:
+    last_checkpoint = sorted(glob.glob("models/"+name+"/checkpoint-*"))[-1]
+    if "mamba" in name:    
+        model = ChessMambaModel(last_checkpoint).model
+    elif "llama" in name:
+        model = ChessLlamaModel(last_checkpoint).model
+    else:
+        print("Invalid model name")
+        exit()
+    resume_from_checkpoint = True
+    
 
-model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-num_params = sum([torch.numel(p) for p in model_parameters])
-print("Number of parameters: ", num_params)
-# print(LlamaConfig())
-# print(ChessLlamaConfig())
+batch_size = args.batch_size
+gradient_accumulation_steps = args.gradient_accumulation_steps
+num_epochs = args.num_epochs
 
-
-
-batch_size = 16
-gradient_accumulation_steps = 16
-num_epochs = 2
 num_steps = len(dataset)//batch_size*num_epochs
 warmup_iters = num_steps//20
 max_iter = 100000
 
+learning_rate = args.lr
 
-
-learning_rate = 1e-3
+os.makedirs("models/"+name, exist_ok=True)
 
 training_args = TrainingArguments(
-    name,
+    output_dir="./models/"+name,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     num_train_epochs=num_epochs,
@@ -85,6 +112,7 @@ training_args = TrainingArguments(
     report_to="wandb",
     save_strategy="steps",
     save_steps=0.05,
+    resume_from_checkpoint=resume_from_checkpoint,
 )
 
 
@@ -97,9 +125,6 @@ trainer = Trainer(
 
 wandb.init(project=wandb_project, name=wandb_run_name)
 
-
 trainer.train()
-
-os.makedirs("models/"+name, exist_ok=True)
 
 model.save_pretrained(name,cache_dir="./models")

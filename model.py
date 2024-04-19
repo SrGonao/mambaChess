@@ -1,4 +1,4 @@
-from transformers import MambaConfig, MambaForCausalLM, LlamaForCausalLM,LlamaConfig
+from transformers import MambaConfig, MambaForCausalLM, LlamaForCausalLM,LlamaConfig, AutoModelForCausalLM
 from tokenizer import CheessTokenizer
 import torch
 from copy import deepcopy
@@ -44,91 +44,11 @@ class ChessLlamaConfig(LlamaConfig):
         self.bos_token_id = 0
         self.eos_token_id = 0
         
-    
+class ChessModel:
 
-class ChessLlamaModel(LlamaForCausalLM):
-    config_class = ChessLlamaConfig
-    base_model_prefix = "llama"
-    tokenizer = CheessTokenizer()
-
-
-
-class ChessMambaModel(MambaForCausalLM):
-    config_class = ChessMambaConfig
-    base_model_prefix = "mamba"
-    tokenizer = CheessTokenizer()
-
-    def get_move(self, state, board, player):
-        if player == 0:
-            input = self.tokenizer.encode(".")
-        else:
-            input = self.tokenizer.encode(" ")
-        input = torch.tensor(input).unsqueeze(0)
-        move=""
-        original_state = deepcopy(state)
-        #print(original_state.ssm_states[0][0][0][0:5])
-        trial_board = deepcopy(board)
-        valid = False
-        input = input.to(self.device)
-        #print(input)
-        for i in range(6):
-            output = self(input, cache_params=state, use_cache=True)
-            state = output.cache_params
-            logits = output.logits
-            index = self.sample(logits,top_k=10)
-            input = index
-            part_move = self.tokenizer.decode_san(index)
-            move+=part_move
-            #print(move)
-            try:
-                trial_board.push_san(move)
-                #print(valid)
-                valid = True
-                state = self(input, cache_params=state, use_cache=True).cache_params
-                break
-            except:
-                continue
-        if valid:
-            return move,state
-        else:
-            return None,original_state
-
-    def get_batched_move(self, states, boards, players):
-        inputs = []
-        for p in players:
-            if p == 0:
-                input = self.tokenizer.encode(".")
-            else:
-                input = self.tokenizer.encode(" ")
-            inputs.append(input)
-        inputs = torch.tensor(inputs)
-        inputs = inputs.to(self.device)
-        
-        moves=["" for i in range(len(players))]
-        valids = [False for i in range(len(players))]
-        states = deepcopy(states)
-        trial_board = deepcopy(boards)
-        
-        for i in range(6):
-            output = self(inputs, cache_params=states, use_cache=True)
-            states = output.cache_params
-            logits = output.logits
-            index = self.sample(logits,top_k=1)
-            inputs = index
-            part_move = self.tokenizer.decode_san_batch(index)
-            for j,pm in enumerate(part_move):
-                if valids[j] == False:
-                    moves[j]+=pm
-                    try:
-                        trial_board[j].push_san(moves[j])
-                        valids[j] = True
-                    except:
-                        continue
-        for j in range(len(players)):
-            if not valids[j]:
-                moves[j] = None
-        return moves,states
-       
+    def __init__(self):
+        self.model = None
+        self.tokenizer = None
 
     def sample(self, logits, temperature=1.0, top_k=0, top_p=0.0):
         logits = logits[:, -1, :]
@@ -151,24 +71,123 @@ class ChessMambaModel(MambaForCausalLM):
             index = torch.multinomial(probs, 1)
         return index
 
+    def get_move(self, state, board, player):
+        
+        if player == 0:
+            input = self.tokenizer.encode(".")
+        else:
+            input = self.tokenizer.encode(" ")
+        input = torch.tensor(input).unsqueeze(0)
+        
+        move=""
+        
+        trial_board = deepcopy(board)
+        
+        original_state = deepcopy(state)
+        valid = False
+        input = input.to(self.device)
+        original_input = input
+        max_moves = 5
+        counter = 0
+        while counter<max_moves and not valid:
+            state = deepcopy(original_state)
+            input = original_input
+            for i in range(6):
+                output,state = self.forward(input,state)
+                logits = output.logits
+                index = self.sample(logits,top_k=5)
+                input = index
+                part_move = self.tokenizer.decode_san(index)
+                #print(part_move)
+                move+=part_move
+                #print(move)
+                try:
+                    trial_board.push_san(move)
+                    valid = True
+                    _, state = self.forward(input, state)
+                    break
+                except:
+                    if part_move == " ":
+                        break
+                    else:
+                        continue
+            counter+=1
+                    
+        if valid:
+            return move,state,0
+        else:
+            legal_moves = list(board.legal_moves)[0]
+            legal_move = board.san(legal_moves)
+            if player == 0:
+                move = "." + str(legal_move)
+                state = self.update_state(original_state,move)
+            else:
+                move = " " + str(legal_move)
+                state = self.update_state(original_state,move)
+            #print("random")
+            return legal_move,state,1   
+    def forward(self,inputs,state):
+        pass
+
+    def eval(self):
+        self.model.eval()
+
+    def to(self,device):
+        self.device = device
+        self.model.to(device)
+      
+
+class ChessLlamaModel(ChessModel):
+
+    config_class = ChessLlamaConfig
+    base_model_prefix = "llama"
+    
+    def __init__(self,config_or_path):
+        super().__init__()
+        if isinstance(config_or_path, str):
+            self.model = LlamaForCausalLM.from_pretrained(config_or_path)
+        else:
+            self.model = LlamaForCausalLM(config_or_path)
+        self.model.config.use_cache = True
+        self.tokenizer = CheessTokenizer()
+
+    def forward(self,inputs,state):
+        outputs = self.model(inputs, past_key_values=state, use_cache=True)
+        return outputs,outputs.past_key_values
+    
     def update_state(self, state, move):
         input = torch.tensor(self.tokenizer.encode(move))
         input = input.unsqueeze(0)
         input = input.to(self.device)
         for i in range(input.shape[1]):
-            output = self(input[:,i].unsqueeze(0), cache_params=state, use_cache=True)
-            state = output.cache_params
+            output = self.model(input[:,i].unsqueeze(0), past_key_values=state, use_cache=True)
+            state = output.past_key_values
+        return state
+
+class ChessMambaModel(ChessModel):
+
+    base_model_prefix = "mamba"
+ 
+    def __init__(self,config_or_path):
+        super().__init__()
+        if isinstance(config_or_path, str):
+            self.model = MambaForCausalLM.from_pretrained(config_or_path)
+        else:
+            self.model = MambaForCausalLM(config_or_path)
+        self.model.config.use_cache = True
+        self.tokenizer = CheessTokenizer()
+
+
+    def forward(self,inputs,state=None):
+        outputs = self.model(inputs, cache_params=state, use_cache=True)
+        return outputs,outputs.cache_params
+
+    def update_state(self, state, move):
+        input = torch.tensor(self.tokenizer.encode(move))
+        input = input.unsqueeze(0)
+        input = input.to(self.device)
+        for i in range(input.shape[1]):
+            _,state = self.forward(input[:,i].unsqueeze(0), state)
+            
         return state
     
-    def update_state_batch(self, states, moves):
-        inputs = []
-        for m in moves:
-            input = torch.tensor(self.tokenizer.encode(m))
-            inputs.append(input)
-        inputs = torch.stack(inputs)
-        inputs = inputs.to(self.device)
-        for i in range(inputs.shape[1]):
-            output = self(inputs[:,i], cache_params=states, use_cache=True)
-            states = output.cache_params
-
-        return states

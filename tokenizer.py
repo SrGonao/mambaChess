@@ -75,6 +75,9 @@ class CheessTokenizer():
 
             return encoded[:-1]
     
+    def encode_batch(self, texts):
+        return [self.encode(text) for text in texts]
+
     def decode(self, tokens):
         return "".join([self.id_to_token[token.item()] for token in tokens])
 
