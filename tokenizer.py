@@ -1,3 +1,4 @@
+import torch
 #possible chess squares
 chess_squares = ["a1","a2","a3","a4","a5","a6","a7","a8",
                 "b1","b2","b3","b4","b5","b6","b7","b8",
@@ -18,9 +19,10 @@ special_moves = ["O-O","O-O-O","x","=","+","#"]
 chess_numbers = ["0","1","2","3","4","5","6","7","8","9"]
 
 delimiters= ["."," "]
-pad_token = ["pad"]
+pad_token = ["PAD"]
 total_vocab = pad_token + chess_squares + chess_pieces + special_moves + chess_numbers + delimiters
-class CheessTokenizer():
+
+class ChessTokenizer():
     def __init__(self):
         self.vocab = total_vocab
         self.vocab_size = len(self.vocab)
@@ -73,27 +75,24 @@ class CheessTokenizer():
                             exit()
                 encoded.append(self.token_to_id[" "])
 
-            return encoded[:-1]
+            return encoded
     
     def encode_batch(self, texts):
         return [self.encode(text) for text in texts]
 
+    
     def decode(self, tokens):
-        return "".join([self.id_to_token[token.item()] for token in tokens])
-
-    def decode_batch(self, tokens):
-        return [self.decode(token) for token in tokens]
-
-    def decode_san(self, tokens):
+        if isinstance(tokens,torch.Tensor):
+            tokens = tokens.tolist()
         string = ""
         for token in tokens:
-            decoded = self.id_to_token[token.item()]
+            decoded = self.id_to_token[token]
             if decoded in rows:
                 decoded = decoded[1:]
             string+=decoded
         return string
     
-    def decode_san_batch(self, batch_tokens):
+    def decode_batch(self, batch_tokens):
         return [self.decode_san(batch) for batch in batch_tokens]
             
         
@@ -161,4 +160,37 @@ class CheessTokenizer():
                 
             
         return tokens
+simple_vocab = ["PAD","."," ","a","b","c","d","e","f","g","h","1","2","3","4","5","6","7","8","9","0","N","B","R","Q","K","q","k","x","=","+","#"]
 
+class ChessSimpleTokenizer():
+    def __init__(self):
+        self.vocab = simple_vocab
+        self.vocab_size = len(self.vocab)
+        self.pattern = ""
+        self.token_to_id,self.id_to_token = self._build_vocab()
+        
+    def encode(self, text):
+        text = text.replace("O-O-O","k")
+        text = text.replace("O-O","q")
+        encoded = [self.token_to_id[s] for s in text]
+        return encoded
+    
+    def encode_batch(self, texts):
+        return [self.encode(text) for text in texts]
+
+    def decode(self, tokens):
+        if isinstance(tokens,torch.Tensor):
+            tokens = tokens.tolist()
+        decoded = "".join([self.id_to_token[token] for token in tokens])
+        decoded = decoded.replace("k","O-O-O")
+        decoded = decoded.replace("q","O-O")
+        return decoded
+
+    def decode_batch(self, tokens):
+        return [self.decode(token) for token in tokens]
+         
+    def _build_vocab(self):
+        token_to_id = {token: i for i, token in enumerate(self.vocab)}
+        id_to_token = {i: token for i, token in enumerate(self.vocab)}
+        return token_to_id, id_to_token
+    
