@@ -7,7 +7,7 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description='Play a game of chess.')
     parser.add_argument('--mamba', type=str, help='Path to mamba model.')
-    parser.add_argument('--stockfish', type=bool, help='Play against stockfish?')
+    parser.add_argument('--stockfish', help='Play against stockfish?',action="store_true")
     parser.add_argument('--skill', type=int, help='Skill level of stockfish.')
     args = parser.parse_args()
     players = []
@@ -22,10 +22,11 @@ def main():
         stockfish_location = "/mnt/ssd-1/gpaulo/mambaChess/stockfish/stockfish"
         stockfish_player = StockfishPlayer(stockfish_location,args.skill)
         players.append(stockfish_player)
-    human_player = HumanPlayer()
-    players.append(human_player)
+    if not args.mamba and not args.stockfish:
+        human_player = HumanPlayer()
+        players.append(human_player)
     game = Game(players)
-    game.play(verbose=["turn","player","move"],timing=True)
+    game.play(verbose=["turn","player","move","board"],timing=True)
     print("Mistakes:",game.mistakes)
     print("Best moves:",game.best_moves)
 
