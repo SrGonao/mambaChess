@@ -1,8 +1,7 @@
-from transformers import MambaConfig, MambaForCausalLM, LlamaForCausalLM,LlamaConfig, AutoModelForCausalLM
-from tokenizer import CheessTokenizer
+from transformers import MambaConfig, MambaForCausalLM, LlamaForCausalLM,LlamaConfig
 import torch
 from copy import deepcopy
-
+from tokenizer import ChessSimpleTokenizer,ChessTokenizer
 class ChessMambaConfig(MambaConfig):
     model_type = "mamba"
 
@@ -74,10 +73,10 @@ class ChessModel:
     def get_move(self, state, board, player):
         
         if player == 0:
-            input = self.tokenizer.encode(".")
+            input = torch.tensor(self.tokenizer.encode(".")).unsqueeze(0)
         else:
-            input = self.tokenizer.encode(" ")
-        input = torch.tensor(input).unsqueeze(0)
+            input = torch.tensor(self.tokenizer.encode(" ")).unsqueeze(0)
+       
         
         move=""
         
@@ -97,7 +96,8 @@ class ChessModel:
                 logits = output.logits
                 index = self.sample(logits,top_k=5)
                 input = index
-                part_move = self.tokenizer.decode_san(index)
+                #print(index)
+                part_move = self.tokenizer.decode(index.tolist()[0])
                 #print(part_move)
                 move+=part_move
                 #print(move)
@@ -142,14 +142,14 @@ class ChessLlamaModel(ChessModel):
     config_class = ChessLlamaConfig
     base_model_prefix = "llama"
     
-    def __init__(self,config_or_path):
+    def __init__(self,config_or_path,tokenizer=None):
         super().__init__()
         if isinstance(config_or_path, str):
             self.model = LlamaForCausalLM.from_pretrained(config_or_path)
         else:
             self.model = LlamaForCausalLM(config_or_path)
         self.model.config.use_cache = True
-        self.tokenizer = CheessTokenizer()
+        self.tokenizer = tokenizer
 
     def forward(self,inputs,state):
         outputs = self.model(inputs, past_key_values=state, use_cache=True)
@@ -168,14 +168,20 @@ class ChessMambaModel(ChessModel):
 
     base_model_prefix = "mamba"
  
-    def __init__(self,config_or_path):
+    def __init__(self,config_or_path,tokenizer):
         super().__init__()
         if isinstance(config_or_path, str):
             self.model = MambaForCausalLM.from_pretrained(config_or_path)
         else:
             self.model = MambaForCausalLM(config_or_path)
+        if tokenizer is None:
+            if self.model.config.tokenizer == "simple":
+                self.tokenizer = ChessSimpleTokenizer()
+            else:
+                self.tokenizer = ChessTokenizer()
+        else:
+            self.tokenizer = tokenizer
         self.model.config.use_cache = True
-        self.tokenizer = CheessTokenizer()
 
 
     def forward(self,inputs,state=None):
@@ -183,7 +189,7 @@ class ChessMambaModel(ChessModel):
         return outputs,outputs.cache_params
 
     def update_state(self, state, move):
-        input = torch.tensor(self.tokenizer.encode(move))
+        input = torch.tensor(self.tokenizer.encode(move).ids)
         input = input.unsqueeze(0)
         input = input.to(self.device)
         for i in range(input.shape[1]):
