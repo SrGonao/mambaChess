@@ -1,4 +1,4 @@
-from tokenizer import CheessTokenizer
+from tokenizer import ChessSimpleTokenizer,ChessTokenizer
 from model import ChessMambaModel, ChessMambaConfig, ChessLlamaModel, ChessLlamaConfig
 from datasets import load_from_disk
 import torch
@@ -14,18 +14,14 @@ import glob
 #Train params
 #if torch.cuda.is_available():
 #    device = torch.device("cuda:7")
-scratch = True
-name = "chess-mamba-v1.4-stockfish"
-wandb_project = "chess-mamba"
-wandb_run_name = name
 
 
 def collate_fn(batch):
-    max_length = max([len(data['ids'][0]) for data in batch])
+    max_length = max([len(data['ids']) for data in batch])
     padded_ids = []
     padded_labels = []
     for data in batch:
-        ids = data['ids'][0]
+        ids = data['ids']
         input_ids = ids
         input_ids.extend([0]*(max_length - len(ids)))  # Padding
         labels = [-100 if x == 0 else x for x in input_ids]
@@ -35,35 +31,52 @@ def collate_fn(batch):
 
 
 parse = argparse.ArgumentParser()
-parse.add_argument("--scratch", type=bool, default=True)
-parse.add_argument("--name", type=str, default="chess-mamba-v1.4-stockfish")
+parse.add_argument("--scratch", action="store_false")
+parse.add_argument("--name", type=str, default="chess-mamba-v2-stockfish")
 parse.add_argument("--num_layers", type=int, default=16)
 parse.add_argument("--hidden_size", type=int, default=512)
 parse.add_argument("--state_size", type=int, default=32)
 parse.add_argument("--num_attention_heads", type=int, default=8)
 parse.add_argument("--batch_size", type=int, default=64)
 parse.add_argument("--gradient_accumulation_steps", type=int, default=4)
-parse.add_argument("--num_epochs", type=int, default=10)
+parse.add_argument("--num_epochs", type=int, default=1)
 parse.add_argument("--lr", type=float, default=1e-3)
+parse.add_argument("--tokenizer", type=str, default="normal")
+
+
 
 args = parse.parse_args()
 
 # Load the dataset
 file_name="dataset_stockfish_dataset_blocks.zip"
-tokenizer = CheessTokenizer()
-
-dataset = load_from_disk("train_"+file_name)
-test_dataset = load_from_disk("test_"+file_name)
-test_dataset = test_dataset.select(range(1000))
+if args.tokenizer == "normal":
+    tokenizer = ChessTokenizer()
+    dataset = load_from_disk("datasets/"+"normal_train_"+file_name)
+    test_dataset = load_from_disk("datasets/"+"normal_test_"+file_name)
+elif args.tokenizer == "simple":
+    tokenizer = ChessSimpleTokenizer()
+    dataset = load_from_disk("datasets/"+"simple_train_"+file_name)
+    test_dataset = load_from_disk("datasets/"+"simple_test_"+file_name)
+else:
+    print("Invalid tokenizer")
+    exit()
     
 
+test_dataset = test_dataset.select(range(1000))
+    
+scratch = args.scratch
+name = args.name
+wandb_project = "chess-mamba"
+wandb_run_name = name
+
+print(scratch)
 if scratch:
     if "mamba" in name:
         config = ChessMambaConfig(num_hidden_layers=args.num_layers,hidden_size=args.hidden_size,intermediate_size=args.hidden_size*2,state_size=args.state_size)
-        model = ChessMambaModel(config).model
+        model = ChessMambaModel(config,tokenizer).model
     elif "llama" in name:
         config = ChessLlamaConfig(num_hidden_layers=args.num_layers,hidden_size=args.hidden_size,n_head=args.num_attention_heads)
-        model = ChessLlamaModel(config).model
+        model = ChessLlamaModel(config,tokenizer).model
     else:
         print("Invalid model name")
         exit()
@@ -72,14 +85,14 @@ if scratch:
     resume_from_checkpoint = False
     print("Number of parameters: ", num_params)
 else:
-    last_checkpoint = sorted(glob.glob("models/"+name+"/checkpoint-*"))[-1]
     if "mamba" in name:    
-        model = ChessMambaModel(last_checkpoint).model
+        model = ChessMambaModel(name,tokenizer).model
     elif "llama" in name:
-        model = ChessLlamaModel(last_checkpoint).model
+        model = ChessLlamaModel(name,tokenizer).model
     else:
         print("Invalid model name")
         exit()
+    name = name+"_continuation"
     resume_from_checkpoint = True
     
 
@@ -94,9 +107,10 @@ max_iter = 100000
 learning_rate = args.lr
 
 os.makedirs("models/"+name, exist_ok=True)
+model.config.use_cache = False
 
 training_args = TrainingArguments(
-    output_dir="./models/"+name,
+    output_dir="models/"+name,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     num_train_epochs=num_epochs,
@@ -126,5 +140,5 @@ trainer = Trainer(
 wandb.init(project=wandb_project, name=wandb_run_name)
 
 trainer.train()
-
-model.save_pretrained(name,cache_dir="./models")
+model.config.tokenizer = args.tokenizer
+model.save_pretrained(name,cache_dir="models")
