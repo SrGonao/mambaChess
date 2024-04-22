@@ -4,7 +4,7 @@ import chess.engine
 
 from copy import deepcopy
 import time
-from players import MambaPlayer,StockfishPlayer,LLamaPlayer
+from players import MambaPlayer,LLamaPlayer
 
 class Game:
     def __init__(self,players):
@@ -29,7 +29,7 @@ class Game:
                 if "turn" in verbose:
                     print("Turn",turn_counter)
                 for i,player in enumerate(players):
-                    if isinstance(player,MambaPlayer):
+                    if isinstance(player,MambaPlayer) or isinstance(player,LLamaPlayer):
                         player.update_state_string(game_string)
                         if verify:
                             player.verify_integrity()
@@ -64,7 +64,7 @@ class Game:
             self.times = [time_p1,time_p2]
         
         for player in players:
-            if isinstance(player,MambaPlayer):
+            if isinstance(player,MambaPlayer) or isinstance(player,LLamaPlayer):
                 mistakes,best_moves = player.get_statistics()
                 self.mistakes = mistakes
                 self.best_moves = best_moves
