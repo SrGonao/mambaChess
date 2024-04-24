@@ -121,7 +121,6 @@ if __name__ == '__main__':
         states = states[:, LAYER, :]
 
         preds = (classifier.forward(states) > 0.5).type_as(converted_board_states)
-        preds = torch.zeros_like(preds)
         preds = preds == converted_board_states
         acc = (torch.sum(preds.to(torch.float32).flatten()) / preds.flatten().size()[0]).item()
         print('(', LAYER, ',', acc, '),')
