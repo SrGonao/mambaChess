@@ -179,7 +179,7 @@ class ChessMambaModel(ChessModel):
 
 
     def forward(self,inputs,state=None):
-        outputs = self.model(inputs, cache_params=state, use_cache=True)
+        outputs = self.model(inputs, cache_params=state, output_hidden_states=True, use_cache=True)
         return outputs,outputs.cache_params
 
     def update_state(self, state, move):
