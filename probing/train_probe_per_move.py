@@ -7,6 +7,9 @@ from torch.nn.functional import (
     binary_cross_entropy_with_logits as bce_with_logits,
     sigmoid
 )
+from torch.nn.functional import (
+    cross_entropy,
+)
 from .board_conversions import *
 
 class Classifier(torch.nn.Module):
@@ -22,7 +25,7 @@ class Classifier(torch.nn.Module):
         super().__init__()
 
         self.linear = torch.nn.Linear(
-            input_dim, num_classes, device=device, dtype=dtype
+            input_dim, num_classes if num_classes > 2 else 1, device=device, dtype=dtype
         )
         self.linear.bias.data.zero_()
         self.linear.weight.data.zero_()
@@ -71,8 +74,6 @@ class Classifier(torch.nn.Module):
 
             # Calculate the loss function
             logits = self(x).squeeze(-1)
-            if len(logits.shape) == 1:
-                logits = logits.unsqueeze(-1)
             loss = loss_fn(logits, y)
             if l2_penalty:
                 reg_loss = loss + l2_penalty * self.linear.weight.square().sum()
@@ -95,22 +96,29 @@ if __name__ == '__main__':
     parser.add_argument('--test-data')
     args = parser.parse_args()
 
-    convert_board_states = occupied_positions
-
     device = args.device
     train_dir = Path(args.train_data)
     test_dir = Path(args.test_data)
 
-    #LAYER = 12
+    convert_board_states = occupied_positions
+
+    LAYERS = [6]
     print('[')
-    for LAYER in range(16):
+    for layer in LAYERS:
         states = torch.load(train_dir  / Path("states.pt")).to(device)
         board_states = torch.load(train_dir / Path("board_states.pt"))
         converted_board_states = convert_board_states(board_states)[0].to(device)
 
+        move_nums = convert_board_states(board_states)[1]
+        move_nums_tensor = torch.tensor(move_nums).unsqueeze(-1).to(device)
         states = states.flatten(start_dim=2)
 
-        states = states[:, LAYER, :]
+        #print(converted_board_states.size())
+
+        states = states[:, layer, :]
+
+        # Add move nums as extra information to probe
+        #states = torch.cat((states, move_nums_tensor), dim=-1)
 
         classifier = Classifier(
             input_dim=states.shape[1],
@@ -124,16 +132,22 @@ if __name__ == '__main__':
         converted_board_states = convert_board_states(board_states)[0].to(device)
 
         move_nums = convert_board_states(board_states)[1]
+        move_nums_tensor = torch.tensor(move_nums).unsqueeze(-1).to(device)
         states = states.flatten(start_dim=2)
 
-        #print(converted_board_states.size())
+        for move_num in range(1, max(move_nums)):
+            states_ = states[torch.Tensor(move_nums) == move_num, :]
+            converted_board_states_ = converted_board_states[torch.Tensor(move_nums) == move_num, :]
+            move_nums_tensor_ = move_nums_tensor[torch.Tensor(move_nums) == move_num, :]
+            num_pieces = (torch.sum(converted_board_states_) / converted_board_states_.shape[0]).item()
+            states_ = states_[:, layer, :]
 
-        states = states[:, LAYER, :]
+            # Add move nums as extra information to probe
+            #states_ = torch.cat((states_, move_nums_tensor_), dim=-1)
 
-        preds = (classifier.forward(states) > 0.5).type_as(converted_board_states)
-        # print(torch.sum(preds, dim=1).shape)
-        #print(preds[0].reshape((8,8)))
-        preds = preds == converted_board_states
-        acc = (torch.sum(preds.to(torch.float32).flatten()) / preds.flatten().size()[0]).item()
-        print('(', LAYER, ',', acc, '),')
+            preds = (classifier.forward(states_) > 0.5).type_as(converted_board_states_)
+            #preds = torch.zeros_like(preds)
+            preds = preds == converted_board_states_
+            acc = (torch.sum(preds.to(torch.float32).flatten()) / preds.flatten().size()[0]).item()
+            print('(', layer, ',', move_num, ",", num_pieces, ",", acc, '),')
     print(']')

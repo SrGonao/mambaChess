@@ -3,9 +3,6 @@ models
 test_dataset_lichess_200k_elo_bins.zip
 train_dataset_lichess_200k_elo_bins.zip
 wandb
-board_states.pt
-converted_states.pt
 chess*
-train*
-test*
 stockfish*
+*.pt

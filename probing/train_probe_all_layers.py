@@ -103,37 +103,32 @@ if __name__ == '__main__':
 
     #LAYER = 12
     print('[')
-    for LAYER in range(16):
-        states = torch.load(train_dir  / Path("states.pt")).to(device)
-        board_states = torch.load(train_dir / Path("board_states.pt"))
-        converted_board_states = convert_board_states(board_states)[0].to(device)
+    states = torch.load(train_dir  / Path("states.pt")).to(device)
+    board_states = torch.load(train_dir / Path("board_states.pt"))
+    converted_board_states = convert_board_states(board_states)[0].to(device)
 
-        states = states.flatten(start_dim=2)
+    states = states.flatten(start_dim=1)
 
-        states = states[:, LAYER, :]
+    classifier = Classifier(
+        input_dim=states.shape[1],
+        num_classes=converted_board_states.shape[1],
+        device=device)
 
-        classifier = Classifier(
-            input_dim=states.shape[1],
-            num_classes=converted_board_states.shape[1],
-            device=device)
+    classifier.fit(states, converted_board_states)
 
-        classifier.fit(states, converted_board_states)
+    states = torch.load(test_dir / Path("states.pt")).to(device)
+    board_states = torch.load(test_dir / Path("board_states.pt"))
+    converted_board_states = convert_board_states(board_states)[0].to(device)
 
-        states = torch.load(test_dir / Path("states.pt")).to(device)
-        board_states = torch.load(test_dir / Path("board_states.pt"))
-        converted_board_states = convert_board_states(board_states)[0].to(device)
+    move_nums = convert_board_states(board_states)[1]
+    states = states.flatten(start_dim=1)
 
-        move_nums = convert_board_states(board_states)[1]
-        states = states.flatten(start_dim=2)
+    #print(converted_board_states.size())
 
-        #print(converted_board_states.size())
-
-        states = states[:, LAYER, :]
-
-        preds = (classifier.forward(states) > 0.5).type_as(converted_board_states)
-        # print(torch.sum(preds, dim=1).shape)
-        #print(preds[0].reshape((8,8)))
-        preds = preds == converted_board_states
-        acc = (torch.sum(preds.to(torch.float32).flatten()) / preds.flatten().size()[0]).item()
-        print('(', LAYER, ',', acc, '),')
+    preds = (classifier.forward(states) > 0.5).type_as(converted_board_states)
+    # print(torch.sum(preds, dim=1).shape)
+    #print(preds[0].reshape((8,8)))
+    preds = preds == converted_board_states
+    acc = (torch.sum(preds.to(torch.float32).flatten()) / preds.flatten().size()[0]).item()
+    print('(', acc, '),')
     print(']')
